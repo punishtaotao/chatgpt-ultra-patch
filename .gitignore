@@ -1,0 +1,6 @@
+*.log
+*.txt
+*.json.bak
+*.bak-*
+bridge.log
+__pycache__/
