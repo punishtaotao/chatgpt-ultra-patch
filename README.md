@@ -32,9 +32,23 @@ bridge/
   server.mjs          Codex <-> WorkBuddy 双账号桥接（CN + 国际版）
   responses.mjs       Responses API <-> chat 协议转换
   start_bridge.pyw    Windows 无控制台启动器
+UltraPatch.pyw       ★ 傻瓜式一键 GUI（v2.0 新增，零依赖）
 ```
 
-## 使用步骤（Windows）
+## 使用方法
+
+### 方式 A：傻瓜式 GUI（推荐，v2.0）
+
+1. 确认装了 Python 3.8+（Windows 商店版也行）
+2. 双击 **`UltraPatch.pyw`**（用 pythonw 打开，没有黑窗口）
+3. 界面上会自动填好检测到的原版位置；检测不到就点「浏览…」选原版 `ChatGPT.exe`
+4. 副本位置保持默认，点 **⚡ 一键补丁**
+5. 完成后点「创建桌面快捷方式」「启动补丁版」即可
+
+GUI 会自动完成：复制副本 → asar 补丁 → exe 哈希同步 → 全量自检，
+每一步都有日志；已打过补丁的副本会安全跳过，不会重复打。
+
+### 方式 B：命令行
 
 > 全程**不要修改系统里已安装的原版**（MSIX 目录需要管理员且会破坏包校验）。
 > 先把整个应用目录复制一份到普通可写目录，对副本操作。
