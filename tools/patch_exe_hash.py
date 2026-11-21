@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Update the asar integrity hash embedded in the Electron executable.
+r"""Update the asar integrity hash embedded in the Electron executable.
 
 Electron builds of some packaged apps (e.g. the ChatGPT desktop app) embed a
 binary resource of the form:
@@ -14,11 +14,17 @@ replacement is length-safe.
 
 Usage:
   python patch_exe_hash.py <path\to\ChatGPT.exe> <path\to\app.asar> [--backup]
+
+Importable: patch_exe_hash(exe_path, asar_path, backup=False, log=print) -> dict
 """
 import io, os, sys, hashlib, struct, re, shutil
 
 MARKER_PAT = re.compile(
     rb'"file":"resources\\\\app\.asar","alg":"SHA256","value":"([0-9a-f]{64})"')
+
+
+class PatchError(Exception):
+    pass
 
 
 def header_sha256(asar_path):
@@ -29,58 +35,70 @@ def header_sha256(asar_path):
     return hashlib.sha256(js).hexdigest()
 
 
-def main():
-    if len(sys.argv) < 3:
-        print("usage: python patch_exe_hash.py <ChatGPT.exe> <app.asar> [--backup]")
-        sys.exit(64)
-    exe = os.path.abspath(sys.argv[1])
-    asar = os.path.abspath(sys.argv[2])
-    do_backup = "--backup" in sys.argv[3:]
+def patch_exe_hash(exe_path, asar_path, backup=False, log=print):
+    exe = os.path.abspath(exe_path)
+    asar = os.path.abspath(asar_path)
+    if not os.path.isfile(exe):
+        raise PatchError("exe not found: %s" % exe)
+    if not os.path.isfile(asar):
+        raise PatchError("asar not found: %s" % asar)
 
     new_hash = header_sha256(asar).encode("ascii")
-    print("patched asar header sha256 = %s" % new_hash.decode())
+    log("patched asar header sha256 = %s" % new_hash.decode())
 
     with io.open(exe, "rb") as f:
         blob = f.read()
 
     hits = MARKER_PAT.findall(blob)
-    print("integrity resource entries found in exe = %d" % len(hits))
+    log("integrity resource entries found in exe = %d" % len(hits))
     if not hits:
-        print("nothing to patch - marker not found (already patched, or different app layout)")
-        sys.exit(1)
-    if len(set(hits)) > 1:
-        print("WARNING: multiple distinct hashes present: %s" % [h.decode() for h in set(hits)])
+        raise PatchError("integrity marker not found in exe "
+                         "(already patched, or different app layout)")
 
     nb = blob
-    cnt = 0
+    replaced = 0
     for old in set(hits):
         if old == new_hash:
-            print("already up to date for %s" % old.decode())
+            log("already up to date for %s" % old.decode())
             continue
-        # length-safe equal-length replacement
         nb = nb.replace(b'"value":"' + old + b'"', b'"value":"' + new_hash + b'"')
-        cnt += 1
-    if cnt == 0:
-        sys.exit(0)
+        replaced += 1
+    if replaced == 0:
+        return {"replaced": 0, "new_header_sha256": new_hash.decode()}
 
-    if do_backup and not os.path.exists(exe + ".bak-hash"):
+    if backup and not os.path.exists(exe + ".bak-hash"):
         shutil.copy2(exe, exe + ".bak-hash")
-        print("backup saved: %s.bak-hash" % exe)
+        log("backup saved: %s.bak-hash" % exe)
 
     tmp = exe + ".tmp"
     with io.open(tmp, "wb") as f:
         f.write(nb)
+    import time
+    last_err = None
     for attempt in range(5):
         try:
             os.replace(tmp, exe)
             break
-        except PermissionError:
-            import time
+        except PermissionError as e:
+            last_err = e
+            log("replace attempt %d failed (file locked), retrying..." % (attempt + 1))
             time.sleep(3)
-            if attempt == 4:
-                print("REPLACE FAILED - file locked (close the app and retry)")
-                sys.exit(3)
-    print("exe updated, %d hash(es) replaced -> %s" % (cnt, new_hash.decode()))
+    else:
+        raise PatchError("could not replace the exe (file locked): %r "
+                         "- close the app and retry" % last_err)
+    log("exe updated, %d hash(es) replaced" % replaced)
+    return {"replaced": replaced, "new_header_sha256": new_hash.decode()}
+
+
+def main():
+    if len(sys.argv) < 3:
+        print("usage: python patch_exe_hash.py <ChatGPT.exe> <app.asar> [--backup]")
+        sys.exit(64)
+    try:
+        patch_exe_hash(sys.argv[1], sys.argv[2], backup=("--backup" in sys.argv[3:]))
+    except PatchError as e:
+        print("ERROR: %s" % e)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
