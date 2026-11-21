@@ -4,3 +4,6 @@
 *.bak-*
 bridge.log
 __pycache__/
+*.bmp
+selftest.pyw
+selftest_out.json
