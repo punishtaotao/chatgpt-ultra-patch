@@ -46,43 +46,49 @@ def detect_installed_apps():
 
 
 def create_desktop_shortcut(target_exe, log):
-    """Create Desktop\\ChatGPT.lnk pointing at target_exe (pure ctypes)."""
-    import ctypes
-    from ctypes import wintypes
+    """Create Desktop\\ChatGPT.lnk pointing at target_exe.
 
+    Uses the WScript.Shell COM object via a hidden PowerShell process.  This is
+    the most reliable way to build a valid .lnk (full LinkTargetIDList + LinkInfo)
+    without third-party packages.  Hand-rolled ctypes/vtable or byte-built .lnk
+    files are headed with native crashes / empty TargetPath -- do not use them.
+    The PowerShell process is started with CREATE_NO_WINDOW so no console flashes.
+    """
     desktop = os.path.join(os.environ.get("USERPROFILE", ""), "Desktop")
     lnk = os.path.join(desktop, "ChatGPT.lnk")
 
-    class GUID(ctypes.Structure):
-        _fields_ = [("Data1", wintypes.DWORD), ("Data2", wintypes.WORD),
-                    ("Data3", wintypes.WORD), ("Data4", ctypes.c_ubyte * 8)]
+    def ps_quote(s):
+        return "'" + s.replace("'", "''") + "'"
 
-    def to_guid(s):
-        g = GUID()
-        ctypes.oledll.ole32.CLSIDFromString(ctypes.c_wchar_p(s), ctypes.byref(g))
-        return g
+    ps = (
+        "$ErrorActionPreference='Stop'\n"
+        "$s=New-Object -ComObject WScript.Shell\n"
+        "$c=$s.CreateShortcut(%s)\n"
+        "$c.TargetPath=%s\n"
+        "$c.WorkingDirectory=%s\n"
+        "$c.Description='ChatGPT (patched)'\n"
+        "$c.IconLocation=(%s + ',0')\n"
+        "$c.Save()\n"
+    ) % (ps_quote(lnk), ps_quote(target_exe), ps_quote(os.path.dirname(target_exe)), ps_quote(target_exe))
 
-    ole32 = ctypes.oledll.ole32
-    ole32.CoInitialize(None)
-    punk = ctypes.c_void_p()
-    ole32.CoCreateInstance(ctypes.byref(to_guid("{00021401-0000-0000-C000-000000000046}")),
-                           None, 1,
-                           ctypes.byref(to_guid("{000214F9-0000-0000-C000-000000000046}")),
-                           ctypes.byref(punk))
-    vtbl = ctypes.cast(ctypes.cast(punk, ctypes.POINTER(ctypes.c_void_p)).contents.value,
-                       ctypes.POINTER(ctypes.c_void_p))
-    F = ctypes.WINFUNCTYPE
-    F(ctypes.c_long, ctypes.c_void_p, ctypes.c_wchar_p)(vtbl[9])(punk, target_exe)          # SetPath
-    F(ctypes.c_long, ctypes.c_void_p, ctypes.c_wchar_p)(vtbl[11])(punk, os.path.dirname(target_exe))  # SetWorkingDirectory
-    F(ctypes.c_long, ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int)(vtbl[7])(punk, target_exe, 0)  # SetIconLocation
-    F(ctypes.c_long, ctypes.c_void_p, ctypes.c_wchar_p)(vtbl[19])(punk, "ChatGPT (patched)")          # SetDescription
-    ppf = ctypes.c_void_p()
-    F(ctypes.c_long, ctypes.c_void_p, ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_void_p))(
-        vtbl[0])(punk, ctypes.byref(to_guid("{0000010b-0000-0000-C000-000000000046}")), ctypes.byref(ppf))
-    vpf = ctypes.cast(ctypes.cast(ppf, ctypes.POINTER(ctypes.c_void_p)).contents.value,
-                      ctypes.POINTER(ctypes.c_void_p))
-    F(ctypes.c_long, ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int)(vpf[6])(ppf, lnk, 1)  # Save
-    ole32.CoUninitialize()
+    # Inline -Command can hang on some setups; a real .ps1 via -File is reliable.
+    import tempfile
+    fd, ps_path = tempfile.mkstemp(suffix=".ps1", prefix="lnk_")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(ps)
+        CREATE_NO_WINDOW = 0x08000000
+        proc = subprocess.Popen(
+            ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden",
+             "-ExecutionPolicy", "Bypass", "-File", ps_path],
+            creationflags=CREATE_NO_WINDOW,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
+        proc.wait(timeout=30)
+    finally:
+        try:
+            os.remove(ps_path)
+        except OSError:
+            pass
     if not os.path.exists(lnk):
         raise RuntimeError("shortcut was not created: %s" % lnk)
     log("桌面快捷方式已创建: %s" % lnk)
